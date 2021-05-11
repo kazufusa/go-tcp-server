@@ -48,7 +48,7 @@ func (h *echoHandler) ServeRequest(conn *tcpserver.Conn) {
 	}
 }
 
-func makeTestServer(t *testing.T) (*tcpserver.TcpServer, *net.TCPAddr, <-chan struct{}, chan<- struct{}, func(), error) {
+func makeTestServer(t *testing.T) (*tcpserver.TCPServer, *net.TCPAddr, <-chan struct{}, chan<- struct{}, func(), error) {
 	var port string = "8080"
 	if v, ok := os.LookupEnv("TEST_PORT"); ok {
 		port = v

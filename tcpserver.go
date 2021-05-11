@@ -8,18 +8,23 @@ import (
 	"time"
 )
 
-var (
-	nextPollInterval = 50 * time.Millisecond
-)
+// shutdownPollInterval is the polling interval when checking
+// quiescence during TcpServer.Shutdown.
+const shutdownPollInterval = 50 * time.Millisecond
 
-type TcpServer struct {
-	l          net.Listener
+// A TCPServer defines parameters for running an TCP server.
+type TCPServer struct {
+	// l is a network listener.
+	l *net.TCPListener
+
+	// true when server shutdown
 	inShutdown int32
 	handler    Handler
 	mu         sync.Mutex
 	activeConn map[*net.Conn]struct{}
 }
 
+// A Handler reads and responds to an client connection.
 type Handler interface {
 	ServeRequest(conn *Conn)
 }
@@ -27,7 +32,7 @@ type Handler interface {
 func New(
 	address string,
 	handler Handler,
-) (*TcpServer, error) {
+) (*TCPServer, error) {
 	tcpAddr, err := net.ResolveTCPAddr(
 		"tcp",
 		address,
@@ -40,10 +45,10 @@ func New(
 		return nil, err
 	}
 
-	return &TcpServer{l: l, handler: handler}, nil
+	return &TCPServer{l: l, handler: handler}, nil
 }
 
-func (t *TcpServer) ListenAndServe() error {
+func (t *TCPServer) ListenAndServe() error {
 	for {
 		conn, err := t.l.Accept()
 		if err != nil {
@@ -72,10 +77,10 @@ func (t *TcpServer) ListenAndServe() error {
 	}
 }
 
-func (t *TcpServer) Shutdown(ctx context.Context) error {
+func (t *TCPServer) Shutdown(ctx context.Context) error {
 	atomic.StoreInt32(&t.inShutdown, 1)
 
-	ticker := time.NewTicker(nextPollInterval)
+	ticker := time.NewTicker(shutdownPollInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -91,7 +96,7 @@ func (t *TcpServer) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (t *TcpServer) trackConn(c *net.Conn, add bool) {
+func (t *TCPServer) trackConn(c *net.Conn, add bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.activeConn == nil {
@@ -104,18 +109,18 @@ func (t *TcpServer) trackConn(c *net.Conn, add bool) {
 	}
 }
 
-func (t *TcpServer) allConsClosed() bool {
+func (t *TCPServer) allConsClosed() bool {
 	return len(t.activeConn) == 0
 }
 
-func (t *TcpServer) closeAllActiveConns() {
+func (t *TCPServer) closeAllActiveConns() {
 	for c := range t.activeConn {
 		_ = (*c).Close()
 		delete(t.activeConn, c)
 	}
 }
 
-func (t *TcpServer) shuttingDown() bool {
+func (t *TCPServer) shuttingDown() bool {
 	return atomic.LoadInt32(&t.inShutdown) != 0
 }
 

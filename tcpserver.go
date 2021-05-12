@@ -2,6 +2,7 @@ package tcpserver
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,10 @@ import (
 // shutdownPollInterval is the polling interval when checking
 // quiescence during TcpServer.Shutdown.
 const shutdownPollInterval = 50 * time.Millisecond
+
+// ErrServerClosed is returned by the TCPServer'sListenAndServe after
+// a call to Shutdown or Close.
+var ErrServerClosed = errors.New("use of closed network connection")
 
 // A TCPServer defines parameters for running an TCP server.
 type TCPServer struct {
@@ -29,6 +34,7 @@ type Handler interface {
 	ServeRequest(conn *Conn)
 }
 
+// New returns a new TCPServer.
 func New(
 	address string,
 	handler Handler,
@@ -48,80 +54,100 @@ func New(
 	return &TCPServer{l: l, handler: handler}, nil
 }
 
-func (t *TCPServer) ListenAndServe() error {
+// ListenAndServe listens TCPListener srv.l and then
+// calls ServeRequest to handle requests on incoming connections.
+func (srv *TCPServer) ListenAndServe() error {
 	for {
-		conn, err := t.l.Accept()
+		conn, err := srv.l.Accept()
 		if err != nil {
 			if nerr, ok := err.(*net.OpError); ok {
 				if nerr.Temporary() {
 					continue
-				} else if nerr.Err.Error() == "use of closed network connection" {
-					return nil
+				} else if nerr.Err.Error() == ErrServerClosed.Error() {
+					return ErrServerClosed
 				}
 			}
 			return err
 		}
-		if t.shuttingDown() {
+		if srv.shuttingDown() {
 			return nil
 		} else {
-			t.trackConn(&conn, true)
+			srv.trackConn(&conn, true)
 			go func() {
 				defer func() {
 					_ = recover()
 					_ = conn.Close()
-					t.trackConn(&conn, false)
+					srv.trackConn(&conn, false)
 				}()
-				t.handler.ServeRequest(&Conn{conn: conn})
+				srv.handler.ServeRequest(&Conn{conn: conn})
 			}()
 		}
 	}
 }
 
-func (t *TCPServer) Shutdown(ctx context.Context) error {
-	atomic.StoreInt32(&t.inShutdown, 1)
+// Shutdown gracefully shuts down the server without interrupting any
+// active connections. Shutdown waits indefinitely for all connections
+// closed. If the provided context expires before the shutdown is
+// complete, Shutdown returns the context's error, otherwise it returns
+// any error returned from closing the Server's underlying Listener srv.l.
+//
+// Once Shutdown has been called on a server, it may not be reused;
+// future calls to methods such as Serve will return ErrServerClosed.
+func (srv *TCPServer) Shutdown(ctx context.Context) error {
+	atomic.StoreInt32(&srv.inShutdown, 1)
 
 	ticker := time.NewTicker(shutdownPollInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			_ = t.l.Close()
-			t.closeAllActiveConns()
 			return ctx.Err()
 		case <-ticker.C:
-			if t.allConsClosed() {
-				return t.l.Close()
+			if srv.allConsClosed() {
+				return srv.l.Close()
 			}
 		}
 	}
 }
 
-func (t *TCPServer) trackConn(c *net.Conn, add bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.activeConn == nil {
-		t.activeConn = make(map[*net.Conn]struct{})
+// Close immediately closes a net.Listener srv.l and any connections.
+// For agraceful shutdown, use Shutdown.
+//
+// Close returns an error returned from closing the Server's
+// net.Listener srv.l.
+func (srv *TCPServer) Close() error {
+	atomic.StoreInt32(&srv.inShutdown, 1)
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+
+	for c := range srv.activeConn {
+		_ = (*c).Close()
+		delete(srv.activeConn, c)
+	}
+	return srv.l.Close()
+}
+
+func (srv *TCPServer) trackConn(c *net.Conn, add bool) {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if srv.activeConn == nil {
+		srv.activeConn = make(map[*net.Conn]struct{})
 	}
 	if add {
-		t.activeConn[c] = struct{}{}
+		srv.activeConn[c] = struct{}{}
 	} else {
-		delete(t.activeConn, c)
+		delete(srv.activeConn, c)
 	}
 }
 
-func (t *TCPServer) allConsClosed() bool {
-	return len(t.activeConn) == 0
+func (srv *TCPServer) allConsClosed() bool {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	return len(srv.activeConn) == 0
 }
 
-func (t *TCPServer) closeAllActiveConns() {
-	for c := range t.activeConn {
-		_ = (*c).Close()
-		delete(t.activeConn, c)
-	}
-}
-
-func (t *TCPServer) shuttingDown() bool {
-	return atomic.LoadInt32(&t.inShutdown) != 0
+func (srv *TCPServer) shuttingDown() bool {
+	return atomic.LoadInt32(&srv.inShutdown) != 0
 }
 
 type Conn struct {

@@ -104,7 +104,7 @@ func TestTcpServer(t *testing.T) {
 	defer cleanUp()
 
 	go func() {
-		if err := server.ListenAndServe(); err != nil {
+		if err := server.ListenAndServe(); err != nil && err != tcpserver.ErrServerClosed {
 			t.Error(err)
 		}
 	}()
@@ -132,7 +132,7 @@ func TestTcpServerShutdown(t *testing.T) {
 	defer cleanup()
 
 	go func() {
-		if err := server.ListenAndServe(); err != nil {
+		if err := server.ListenAndServe(); err != nil && err != tcpserver.ErrServerClosed {
 			t.Error(err)
 		}
 	}()
@@ -152,7 +152,7 @@ func TestTcpServerShutdownWithBlocking(t *testing.T) {
 	defer cleanUp()
 
 	go func() {
-		if err := server.ListenAndServe(); err != nil {
+		if err := server.ListenAndServe(); err != nil && err != tcpserver.ErrServerClosed {
 			t.Error(err)
 		}
 	}()
@@ -181,7 +181,7 @@ func TestTcpServerShutdownTimedOut(t *testing.T) {
 	defer cleanUp()
 
 	go func() {
-		if err := server.ListenAndServe(); err != nil {
+		if err := server.ListenAndServe(); err != nil && err != tcpserver.ErrServerClosed {
 			t.Error(err)
 		}
 	}()
@@ -195,5 +195,33 @@ func TestTcpServerShutdownTimedOut(t *testing.T) {
 	err = server.Shutdown(ctx)
 	if err != context.DeadlineExceeded {
 		t.Errorf("expected %v, actual %v", context.DeadlineExceeded, err)
+	}
+	err = server.Close()
+	if err != nil {
+		t.Error(err)
+	}
+	wg.Wait()
+}
+
+func TestTcpServerFailToRestart(t *testing.T) {
+	server, _, _, _, cleanUp, err := makeTestServer(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanUp()
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != tcpserver.ErrServerClosed {
+			t.Error(err)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+	if err = server.Shutdown(ctx); err != nil {
+		t.Error(err)
+	}
+	if err = server.ListenAndServe(); err != tcpserver.ErrServerClosed {
+		t.Errorf("expected %#v, actual %#v", tcpserver.ErrServerClosed, err)
 	}
 }

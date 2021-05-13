@@ -150,22 +150,33 @@ func (srv *TCPServer) shuttingDown() bool {
 	return atomic.LoadInt32(&srv.inShutdown) != 0
 }
 
+// Conn is a wrapper of net.Conn and handles net.Error.Temporary()
+// and net.Error.Timeout() in Read/Write.
 type Conn struct {
 	conn net.Conn
 }
 
+// SetDeadline sets the read and write deadlines associated
+// with the connection with net.Conn.SetDeadline.
 func (c *Conn) SetDeadline(deadline time.Time) error {
 	return c.conn.SetDeadline(deadline)
 }
 
+// SetWriteDeadline sets the deadline for future Write calls
+// and any currently-blocked Write call with net.Conn.SetReadDeadline.
 func (c *Conn) SetReadDeadline(deadline time.Time) error {
 	return c.conn.SetReadDeadline(deadline)
 }
 
+// SetWriteDeadline sets the deadline for future Write calls
+// and any currently-blocked Write call with net.Conn.SetWriteDeadline.
 func (c *Conn) SetWriteDeadline(deadline time.Time) error {
 	return c.conn.SetWriteDeadline(deadline)
 }
 
+// Read is a wrapper of net.Conn.Read and reads data from the connection.
+// If net.Conn.Read returns an Error with Temporary() == true,
+// Read retries to read.
 func (c *Conn) Read(buf []byte) (n int, err error) {
 	for {
 		n, err = c.conn.Read(buf)
@@ -179,6 +190,9 @@ func (c *Conn) Read(buf []byte) (n int, err error) {
 	}
 }
 
+// Write is a wrapper of net.Conn.Write and writes data to the connection.
+// If net.Conn.Write returns an Error with Temporary() == true,
+// Write retries to write.
 func (c *Conn) Write(res []byte) (n int, err error) {
 	for {
 		n, err = c.conn.Write(res)
